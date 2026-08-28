@@ -300,6 +300,22 @@
   .status-dot.free{background:var(--success);}
   .status-dot.used{background:var(--error);}
 
+  /* Suivi des étudiants */
+  .student-row{
+    display:flex; justify-content:space-between; align-items:center; padding:12px 16px;
+    border:1px solid var(--ink-softer); border-radius:8px; margin-bottom:8px; cursor:pointer;
+    background:var(--ink-soft);
+  }
+  .student-row:hover{border-color:var(--gold-soft);}
+  .student-row .s-name{font-family:var(--font-display); font-size:15px;}
+  .student-row .s-meta{font-family:var(--font-mono); font-size:11px; color:var(--text-ink-dim);}
+  .student-detail{
+    background:var(--ink); border:1px solid var(--gold-soft); border-radius:8px;
+    padding:16px; margin:-4px 0 14px; font-size:13px;
+  }
+  .student-detail table{width:100%; border-collapse:collapse; margin-top:10px;}
+  .student-detail td, .student-detail th{padding:5px 8px; text-align:left; border-bottom:1px solid var(--ink-softer); font-size:12px;}
+
   .qtext{font-family:var(--font-display); font-size:16px; margin:0 0 10px; line-height:1.5;}
   .option-row{
     display:block; width:100%; text-align:left;
@@ -1820,50 +1836,102 @@ async function activatePlan(planId){
 }
 
 /* ---------- Codes d'activation (espace formateur) ----------
-   Stockés en shared:true : visibles/accessibles par tous les utilisateurs de cet artifact.
-   L'index complet est gardé dans une seule clé pour limiter le nombre d'appels de stockage. */
-const CODES_INDEX_KEY = "codes-index";
+   Chaque code est stocké sous sa PROPRE clé partagée (code:XXXX), plutôt que
+   dans un tableau unique partagé. Ça élimine le risque de collision d'écriture
+   quand plusieurs candidats/générations de code se produisent en même temps :
+   chaque code s'écrit et se lit indépendamment des autres. */
+const CODE_KEY_PREFIX = "code:";
 
-async function loadCodesIndex(){
-  try{
-    const res = await window.storage.get(CODES_INDEX_KEY, true);
-    return res ? JSON.parse(res.value) : [];
-  }catch(e){
-    return [];
-  }
-}
-async function saveCodesIndex(list){
-  try{
-    await window.storage.set(CODES_INDEX_KEY, JSON.stringify(list), true);
-  }catch(e){ console.error("Erreur de sauvegarde des codes", e); }
-}
 function randomDigits(n){
   let s = "";
   for(let i=0;i<n;i++) s += Math.floor(Math.random()*10);
   return s;
 }
 async function generateCode(planId){
-  const list = await loadCodesIndex();
-  let code;
+  let code, key;
+  let exists = true;
+  // Collision quasi impossible (10^6 combinaisons par formule), mais on vérifie par sécurité.
   do {
     code = `TFG-${planId.toUpperCase()}-${randomDigits(6)}`;
-  } while(list.some(c=>c.code === code));
-  list.unshift({ code, plan: planId, createdAt: Date.now(), used: false, usedBy: null, usedAt: null });
-  await saveCodesIndex(list);
+    key = CODE_KEY_PREFIX + code;
+    try{
+      const res = await window.storage.get(key, true);
+      exists = !!res;
+    }catch(e){ exists = false; }
+  } while(exists);
+  const entry = { code, plan: planId, createdAt: Date.now(), used: false, usedBy: null, usedAt: null };
+  await window.storage.set(key, JSON.stringify(entry), true);
   return code;
 }
 async function redeemCode(rawCode){
   const code = rawCode.trim().toUpperCase();
-  const list = await loadCodesIndex();
-  const entry = list.find(c=>c.code === code);
-  if(!entry) return {ok:false, reason:"introuvable"};
+  const key = CODE_KEY_PREFIX + code;
+  let entry;
+  try{
+    const res = await window.storage.get(key, true);
+    if(!res) return {ok:false, reason:"introuvable"};
+    entry = JSON.parse(res.value);
+  }catch(e){
+    return {ok:false, reason:"introuvable"};
+  }
   if(entry.used) return {ok:false, reason:"déjà utilisé"};
   entry.used = true;
   entry.usedBy = state.student;
   entry.usedAt = Date.now();
-  await saveCodesIndex(list);
+  await window.storage.set(key, JSON.stringify(entry), true);
   await activatePlan(entry.plan);
   return {ok:true, plan: entry.plan};
+}
+async function loadAllCodes(){
+  try{
+    const res = await window.storage.list(CODE_KEY_PREFIX, true);
+    if(!res || !res.keys || res.keys.length === 0) return [];
+    const entries = await Promise.all(res.keys.map(async k=>{
+      try{
+        const r = await window.storage.get(k, true);
+        return r ? JSON.parse(r.value) : null;
+      }catch(e){ return null; }
+    }));
+    return entries.filter(Boolean).sort((a,b)=> b.createdAt - a.createdAt);
+  }catch(e){
+    return [];
+  }
+}
+
+/* ---------- Registre des étudiants (suivi formateur) ----------
+   Même principe : chaque étudiant a sa propre clé (student:xxx), pour que
+   deux connexions simultanées de candidats différents ne se marchent jamais dessus. */
+const STUDENT_KEY_PREFIX = "student:";
+
+async function registerStudent(name){
+  const key = STUDENT_KEY_PREFIX + name.trim().toLowerCase();
+  let existing = null;
+  try{
+    const res = await window.storage.get(key, true);
+    if(res) existing = JSON.parse(res.value);
+  }catch(e){ existing = null; }
+  const entry = existing
+    ? { ...existing, displayName: name.trim(), lastSeenAt: Date.now() }
+    : { displayName: name.trim(), firstSeenAt: Date.now(), lastSeenAt: Date.now() };
+  await window.storage.set(key, JSON.stringify(entry), true);
+  return !existing; // true si c'est un tout nouveau nom
+}
+async function loadAllStudents(){
+  try{
+    const res = await window.storage.list(STUDENT_KEY_PREFIX, true);
+    if(!res || !res.keys || res.keys.length === 0) return [];
+    const entries = await Promise.all(res.keys.map(async k=>{
+      try{
+        const r = await window.storage.get(k, true);
+        if(!r) return null;
+        const key = k.startsWith(STUDENT_KEY_PREFIX) ? k.slice(STUDENT_KEY_PREFIX.length) : k;
+        return { key, ...JSON.parse(r.value) };
+      }catch(e){ return null; }
+    }));
+    return entries.filter(Boolean).sort((a,b)=> b.lastSeenAt - a.lastSeenAt);
+  }catch(e){
+    return [];
+  }
 }
 
 /* ---------- Génération d'exercices par IA (CO, CE, Structures) ----------
@@ -1999,11 +2067,14 @@ function levelFromScore(avg){
 }
 
 function computeGlobalAverage(){
+  return computeAverageFromProgress(state.progress);
+}
+function computeAverageFromProgress(progress){
   const scores = [];
   DATA.modules.forEach(m=>{
     if(m.type !== "quiz") return;
     m.lessons.forEach(l=>{
-      const s = state.progress[m.id] && state.progress[m.id].scores && state.progress[m.id].scores[l.id];
+      const s = progress[m.id] && progress[m.id].scores && progress[m.id].scores[l.id];
       if(typeof s === "number") scores.push(s);
     });
   });
@@ -2206,19 +2277,46 @@ function renderLogin(){
     <p class="lead">Entraîne-toi sur les 4 compétences du test — compréhension orale, compréhension écrite, structures de la langue, expression écrite et orale — et suis ta progression vers le niveau CECR visé.</p>
     <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
       <input type="text" id="nameInput" placeholder="Ton prénom" />
+      <input type="password" id="passInput" placeholder="Mot de passe" />
       <button class="btn btn-gold" id="startBtn">Commencer</button>
     </div>
-    <p class="note" style="max-width:480px;">Ta progression est sauvegardée sous ce prénom. Utilise toujours le même pour retrouver ton avancement.</p>
+    <p id="loginMsg" style="font-size:13px; color:var(--error-soft); margin-top:8px;"></p>
+    <p class="note" style="max-width:480px;">Première connexion ? Choisis un mot de passe — il sera demandé à chaque prochaine connexion sous ce prénom. <strong>Si tu es dans un groupe avec d'autres candidats, choisis un identifiant unique</strong> (ex : Prénom + initiale du nom, comme « MarieK ») pour ne jamais partager ta progression avec quelqu'un d'autre.</p>
   </div>`;
+}
+async function hashPassword(pw){
+  const data = new TextEncoder().encode(pw);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hashBuffer)).map(b=>b.toString(16).padStart(2,"0")).join("");
 }
 function attachLogin(){
   const btn = document.getElementById("startBtn");
   const input = document.getElementById("nameInput");
+  const passInput = document.getElementById("passInput");
+  const msg = document.getElementById("loginMsg");
   const go = async ()=>{
     const name = input.value.trim();
+    const pass = passInput.value;
     if(!name) { input.focus(); return; }
+    if(!pass) { msg.textContent = "Choisis un mot de passe pour protéger ta progression."; passInput.focus(); return; }
+    btn.disabled = true;
+    msg.textContent = "";
+    const progress = await loadProgress(name);
+    const enteredHash = await hashPassword(pass);
+    if(progress.passwordHash){
+      if(progress.passwordHash !== enteredHash){
+        msg.textContent = "Mot de passe incorrect pour ce prénom. Si ce n'est pas toi, choisis un identifiant différent.";
+        btn.disabled = false;
+        return;
+      }
+    } else {
+      progress.passwordHash = enteredHash;
+      await saveProgress(name, progress);
+    }
     state.student = name;
-    state.progress = await loadProgress(name);
+    state.progress = progress;
+    btn.disabled = false;
+    registerStudent(name); // asynchrone, pas besoin d'attendre pour continuer
     if(state.pendingExam){
       state.pendingExam = false;
       state.view = "examLevelSelect";
@@ -2241,7 +2339,8 @@ function attachLogin(){
     }
   };
   btn.addEventListener("click", go);
-  input.addEventListener("keydown", e=>{ if(e.key === "Enter") go(); });
+  input.addEventListener("keydown", e=>{ if(e.key === "Enter") passInput.focus(); });
+  passInput.addEventListener("keydown", e=>{ if(e.key === "Enter") go(); });
 }
 
 function renderDashboard(){
@@ -2403,6 +2502,12 @@ function renderAdmin(){
   <div id="newCodeZone"></div>
   <h2 style="margin-top:30px;">Historique des codes</h2>
   <div id="codesHistory"><p class="dim">Chargement...</p></div>
+
+  <h1 style="margin-top:50px;">Suivi des étudiants</h1>
+  <p class="lead">Tous les prénoms qui se sont déjà connectés à la plateforme. Clique sur un candidat pour voir ses scores et réinitialiser ses corrections IA gratuites si besoin.</p>
+  <button class="btn btn-gold" id="resetAllBtn" style="margin-bottom:16px;">Réinitialiser les corrections IA gratuites de TOUS les étudiants</button>
+  <p id="resetAllMsg" style="font-size:13px; margin-bottom:14px;"></p>
+  <div id="studentsList"><p class="dim">Chargement...</p></div>
   `;
 }
 
@@ -2427,7 +2532,7 @@ async function attachAdmin(){
 
   async function refreshHistory(){
     const zone = document.getElementById("codesHistory");
-    const list = await loadCodesIndex();
+    const list = await loadAllCodes();
     if(list.length === 0){
       zone.innerHTML = `<p class="dim">Aucun code généré pour le moment.</p>`;
       return;
@@ -2462,6 +2567,121 @@ async function attachAdmin(){
   });
 
   refreshHistory();
+
+  async function refreshStudents(){
+    const zone = document.getElementById("studentsList");
+    const students = await loadAllStudents();
+    if(students.length === 0){
+      zone.innerHTML = `<p class="dim">Aucun étudiant enregistré pour le moment.</p>`;
+      return;
+    }
+    students.sort((a,b)=> b.lastSeenAt - a.lastSeenAt);
+    zone.innerHTML = students.map(s=>{
+      const lastSeen = new Date(s.lastSeenAt).toLocaleDateString("fr-FR");
+      return `<div>
+        <div class="student-row" data-student="${s.key}" data-display="${s.displayName}">
+          <span class="s-name">${s.displayName}</span>
+          <span class="s-meta">Dernière visite : ${lastSeen}</span>
+        </div>
+        <div id="detail-${s.key}"></div>
+      </div>`;
+    }).join("");
+
+    document.querySelectorAll(".student-row").forEach(row=>{
+      row.addEventListener("click", async ()=>{
+        const key = row.dataset.student;
+        const displayName = row.dataset.display;
+        const detailZone = document.getElementById(`detail-${key}`);
+        if(detailZone.innerHTML.trim() !== ""){
+          detailZone.innerHTML = ""; // referme si déjà ouvert
+          return;
+        }
+        detailZone.innerHTML = `<div class="student-detail">Chargement...</div>`;
+        const progress = await loadProgress(displayName);
+        const avg = computeAverageFromProgress(progress);
+        const lvl = levelFromScore(avg);
+        const acc = progress.access || {plan:"free", expiresAt:null, simEEAttemptsUsed:0};
+        const premium = acc.plan !== "free" && acc.expiresAt && acc.expiresAt > Date.now();
+
+        const moduleRows = DATA.modules.filter(m=>m.type==="quiz").map(m=>{
+          const scores = progress[m.id] && progress[m.id].scores ? progress[m.id].scores : {};
+          const vals = Object.values(scores);
+          const modAvg = vals.length ? Math.round(vals.reduce((a,b)=>a+b,0)/vals.length) : null;
+          return `<tr><td>${m.name}</td><td>${vals.length} leçon(s) faite(s)</td><td>${modAvg !== null ? modAvg + "%" : "—"}</td></tr>`;
+        }).join("");
+
+        detailZone.innerHTML = `
+          <div class="student-detail">
+            <p><strong>Niveau estimé :</strong> ${lvl !== null ? LEVELS[lvl] : "—"} (moyenne ${avg !== null ? avg + "%" : "—"})</p>
+            <p><strong>Formule :</strong> ${premium ? acc.plan.toUpperCase() + " (expire le " + new Date(acc.expiresAt).toLocaleDateString("fr-FR") + ")" : "Gratuite"}</p>
+            <p><strong>Corrections IA gratuites utilisées :</strong> ${acc.simEEAttemptsUsed || 0} / ${FREE_SIM_EE_ATTEMPTS}</p>
+            <table>
+              <tr><th>Module</th><th>Progression</th><th>Score moyen</th></tr>
+              ${moduleRows}
+            </table>
+            <p style="margin-top:14px; margin-bottom:4px;"><strong>Débloquer B1 à C2 directement</strong> (sans passer par un code) :</p>
+            <div class="lesson-actions">
+              ${ACCESS_PLANS.map(p=>`<button class="btn btn-gold" data-activate="${p.id}" data-displayname2="${displayName}" style="font-size:12px; padding:8px 14px;">Activer ${p.name}</button>`).join("")}
+            </div>
+            <p id="activateMsg-${key}" style="font-size:12px; margin-top:8px; color:var(--success);"></p>
+            <div class="lesson-actions" style="margin-top:16px;">
+              <button class="btn btn-ghost" data-reset="${key}" data-displayname="${displayName}" style="color:var(--text-ink); border-color:var(--gold-soft);">Réinitialiser ses corrections IA gratuites</button>
+            </div>
+            <p id="resetMsg-${key}" style="font-size:12px; margin-top:8px; color:var(--success);"></p>
+          </div>
+        `;
+
+        detailZone.querySelectorAll("[data-activate]").forEach(actBtn=>{
+          actBtn.addEventListener("click", async ()=>{
+            actBtn.disabled = true;
+            const planId = actBtn.dataset.activate;
+            const plan = ACCESS_PLANS.find(p=>p.id === planId);
+            const freshProgress = await loadProgress(displayName);
+            if(!freshProgress.access) freshProgress.access = {plan:"free", expiresAt:null, simEEAttemptsUsed:0};
+            freshProgress.access.plan = planId;
+            freshProgress.access.expiresAt = Date.now() + plan.days * 24 * 60 * 60 * 1000;
+            await saveProgress(displayName, freshProgress);
+            document.getElementById(`activateMsg-${key}`).textContent = `✅ Formule ${plan.name} activée pour ${displayName} (${plan.days} jours), sans code.`;
+            actBtn.disabled = false;
+          });
+        });
+
+        const resetBtn = detailZone.querySelector("[data-reset]");
+        resetBtn.addEventListener("click", async ()=>{
+          resetBtn.disabled = true;
+          const freshProgress = await loadProgress(displayName);
+          if(!freshProgress.access) freshProgress.access = {plan:"free", expiresAt:null, simEEAttemptsUsed:0};
+          freshProgress.access.simEEAttemptsUsed = 0;
+          await saveProgress(displayName, freshProgress);
+          document.getElementById(`resetMsg-${key}`).textContent = "✅ Compteur réinitialisé — ce candidat a de nouveau droit à sa correction IA gratuite.";
+          resetBtn.disabled = false;
+        });
+      });
+    });
+  }
+  refreshStudents();
+
+  document.getElementById("resetAllBtn").addEventListener("click", async ()=>{
+    const btn = document.getElementById("resetAllBtn");
+    const msg = document.getElementById("resetAllMsg");
+    btn.disabled = true;
+    msg.textContent = "Réinitialisation en cours...";
+    msg.style.color = "var(--text-ink-dim)";
+    const students = await loadAllStudents();
+    let count = 0;
+    for(const s of students){
+      const progress = await loadProgress(s.displayName);
+      if(!progress.access) progress.access = {plan:"free", expiresAt:null, simEEAttemptsUsed:0};
+      if((progress.access.simEEAttemptsUsed || 0) > 0){
+        progress.access.simEEAttemptsUsed = 0;
+        await saveProgress(s.displayName, progress);
+        count++;
+      }
+    }
+    msg.textContent = `✅ Terminé — compteur réinitialisé pour ${count} étudiant(s) sur ${students.length}.`;
+    msg.style.color = "var(--success)";
+    btn.disabled = false;
+  });
 }
 
 /* ---------- Examen blanc ---------- */
