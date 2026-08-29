@@ -390,6 +390,39 @@
   }
   .member-chip button{background:none; border:none; color:var(--error-soft); cursor:pointer; font-size:14px; padding:0;}
 
+  /* Messagerie */
+  .msg-thread{display:flex; flex-direction:column; gap:10px; max-width:600px; margin:16px 0;}
+  .msg-bubble{max-width:75%; padding:10px 14px; border-radius:10px; font-size:14px; line-height:1.5;}
+  .msg-bubble.from-etudiant{align-self:flex-end; background:var(--gold); color:var(--ink);}
+  .msg-bubble.from-formateur{align-self:flex-start; background:var(--ink-soft); border:1px solid var(--ink-softer);}
+  .msg-bubble .msg-date{font-size:10px; opacity:.7; margin-top:4px; display:block;}
+  .msg-input-row{display:flex; gap:8px; max-width:600px; margin-top:10px;}
+  .msg-input-row textarea{flex:1; min-height:60px;}
+  .conv-row{
+    display:flex; justify-content:space-between; align-items:center; padding:12px 16px;
+    border:1px solid var(--ink-softer); border-radius:8px; margin-bottom:8px; cursor:pointer; background:var(--ink-soft);
+  }
+  .conv-row:hover{border-color:var(--gold-soft);}
+  .unread-badge{background:var(--gold); color:var(--ink); font-family:var(--font-mono); font-size:10px; font-weight:700; padding:2px 7px; border-radius:10px;}
+
+  /* Gestion pédagogique du groupe (Phase A) */
+  .devoir-card, .annonce-card, .ressource-card, .event-card{
+    background:var(--ink-soft); border:1px solid var(--ink-softer); border-radius:8px; padding:14px; margin-bottom:10px;
+  }
+  .devoir-suivi-row{display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-bottom:1px solid var(--ink-softer); font-size:12px;}
+  .devoir-suivi-row:last-child{border-bottom:none;}
+  .badge-dot{display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px;}
+  .badge-dot.done{background:var(--success);}
+  .badge-dot.progress{background:#e0a930;}
+  .badge-dot.notdone{background:var(--error);}
+  .group-tabs{display:flex; gap:6px; flex-wrap:wrap; margin:16px 0;}
+  .group-tab{
+    font-family:var(--font-mono); font-size:11px; padding:7px 12px; border-radius:6px;
+    border:1px solid var(--ink-softer); background:var(--ink-soft); color:var(--text-ink-dim); cursor:pointer;
+  }
+  .group-tab.active{background:var(--gold); color:var(--ink); border-color:var(--gold); font-weight:700;}
+  .difficulty-alert{background:var(--ink-soft); border:1px solid var(--gold); border-radius:10px; padding:16px 18px; margin:14px 0;}
+
   /* Suivi des étudiants */
   .student-row{
     display:flex; justify-content:space-between; align-items:center; padding:12px 16px;
@@ -2126,6 +2159,39 @@ async function deleteGroup(id){
   await window.storage.delete(GROUP_KEY_PREFIX + id, true);
 }
 
+/* ==================================================================
+   PHASE A — Devoirs, Annonces, Ressources, Calendrier, Rapports
+   Réutilise exactement le pattern déjà éprouvé (clé individuelle par
+   enregistrement, listée via list()) pour chaque nouvelle collection.
+   ================================================================== */
+
+function makeCollectionAPI(prefix){
+  return {
+    async save(item){
+      await window.storage.set(prefix + item.id, JSON.stringify(item), true);
+    },
+    async loadAll(){
+      try{
+        const res = await window.storage.list(prefix, true);
+        if(!res || !res.keys || res.keys.length === 0) return [];
+        const entries = await Promise.all(res.keys.map(async k=>{
+          try{ const r = await window.storage.get(k, true); return r ? JSON.parse(r.value) : null; }
+          catch(e){ return null; }
+        }));
+        return entries.filter(Boolean).sort((a,b)=> (b.createdAt||0) - (a.createdAt||0));
+      }catch(e){ return []; }
+    },
+    async remove(id){
+      await window.storage.delete(prefix + id, true);
+    }
+  };
+}
+const DevoirsAPI = makeCollectionAPI("devoir:");
+const AnnoncesAPI = makeCollectionAPI("annonce:");
+const RessourcesAPI = makeCollectionAPI("ressource:");
+const EvenementsAPI = makeCollectionAPI("event:");
+const MessagesAPI = makeCollectionAPI("message:");
+
 // Contexte d'accès du candidat courant : formule individuelle payante (prioritaire),
 // sinon groupe actif s'il en fait partie, sinon accès gratuit par défaut (A1-A2, tous modules).
 function currentAccessContext(){
@@ -2135,6 +2201,7 @@ function currentAccessContext(){
   }
   return { unrestricted: false, levels: FREE_LEVELS, competences: GROUP_COMPETENCE_OPTIONS.filter(c=>c.id!=="examens_blancs").map(c=>c.id) };
 }
+
 
 function isLevelLocked(level){
   const ctx = currentAccessContext();
@@ -2541,6 +2608,9 @@ let state = {
   examMode: null,
   examCompetence: null,
   myGroup: null,
+  currentDevoirId: null,
+  adminGroupDetailId: null,
+  adminGroupDetailObj: null,
   examRevealedLessons: [],
   examTimerHandle: null,
   examResult: null,
@@ -2733,6 +2803,9 @@ function render(){
   else if(state.view === "examLevelSelect"){ app.innerHTML = renderExamLevelSelect(); attachExamLevelSelect(); }
   else if(state.view === "examHub"){ app.innerHTML = renderExamHub(); attachExamHub(); }
   else if(state.view === "mesErreurs"){ app.innerHTML = renderMesErreurs(); attachMesErreurs(); }
+  else if(state.view === "adminGroupDetail"){ app.innerHTML = renderAdminGroupDetail(); attachAdminGroupDetail(); }
+  else if(state.view === "monGroupe"){ app.innerHTML = renderMonGroupe(); attachMonGroupe(); }
+  else if(state.view === "messagerie"){ app.innerHTML = renderMessagerie(); attachMessagerie(); }
   else if(state.view === "examMiniSelect"){ app.innerHTML = renderExamMiniSelect(); attachExamMiniSelect(); }
   else if(state.view === "examCompetenceSelect"){ app.innerHTML = renderExamCompetenceSelect(); attachExamCompetenceSelect(); }
   else if(state.view === "examRunning"){ app.innerHTML = renderExamRunning(); attachExamRunning(); }
@@ -3006,9 +3079,18 @@ function renderDashboard(){
     <p style="margin:0;">Tu fais partie du groupe <strong>${state.myGroup.name}</strong>. Votre accès à ce contenu expire le <strong>${new Date(state.myGroup.endDate).toLocaleDateString("fr-FR")}</strong>.</p>
   </div>` : "";
 
+  const unreadNotifs = (state.progress.notifications || []).filter(n=>!n.read);
+  const notifsBanner = unreadNotifs.length ? `
+  <div class="reco-card" style="border-color:var(--gold);">
+    <p class="eyebrow" style="margin-bottom:6px;">🔔 ${unreadNotifs.length} notification(s) non lue(s)</p>
+    ${unreadNotifs.slice(0,5).map(n=>`<p style="margin:4px 0; font-size:14px;">${n.message} <span class="dim" style="font-size:11px;">(${new Date(n.date).toLocaleDateString("fr-FR")})</span></p>`).join("")}
+    <button class="btn btn-ghost" id="markNotifsReadBtn" style="margin-top:10px; font-size:12px; padding:6px 12px; color:var(--text-ink); border-color:var(--gold-soft);">Marquer comme lues</button>
+  </div>` : "";
+
   return `
   ${topBar()}
   ${groupBanner}
+  ${notifsBanner}
   <div class="grid-dash">
     <div>
       <div class="ladder">${rungs}</div>
@@ -3016,6 +3098,8 @@ function renderDashboard(){
       <button class="btn btn-ghost" id="goProgressionDash" style="width:100%; margin-top:14px; color:var(--text-ink); border-color:var(--gold-soft);">📊 Voir ma progression détaillée</button>
       <button class="btn btn-ghost" id="goErreursDash" style="width:100%; margin-top:10px; color:var(--text-ink); border-color:var(--gold-soft);">❌ Mes erreurs</button>
       <button class="btn btn-ghost" id="goExamDash" style="width:100%; margin-top:10px; color:var(--text-ink); border-color:var(--gold-soft);">🎯 Tests & Examens blancs</button>
+      ${state.myGroup ? `<button class="btn btn-ghost" id="goMonGroupeDash" style="width:100%; margin-top:10px; color:var(--text-ink); border-color:var(--gold-soft);">👥 Mon groupe</button>` : ""}
+      <button class="btn btn-ghost" id="goMessagerieDash" style="width:100%; margin-top:10px; color:var(--text-ink); border-color:var(--gold-soft);">👨‍🏫 Contacter mon formateur</button>
     </div>
     <div>
       <h2>Tes axes de préparation</h2>
@@ -3044,6 +3128,26 @@ function attachDashboard(){
   });
   document.getElementById("goErreursDash").addEventListener("click", ()=>{
     state.view = "mesErreurs";
+    render();
+  });
+  const goMonGroupeDash = document.getElementById("goMonGroupeDash");
+  if(goMonGroupeDash){
+    goMonGroupeDash.addEventListener("click", ()=>{
+      state.view = "monGroupe";
+      render();
+    });
+  }
+  const markNotifsBtn = document.getElementById("markNotifsReadBtn");
+  if(markNotifsBtn){
+    markNotifsBtn.addEventListener("click", async ()=>{
+      markNotifsBtn.disabled = true;
+      (state.progress.notifications || []).forEach(n=> n.read = true);
+      await saveProgress(state.student, state.progress);
+      render();
+    });
+  }
+  document.getElementById("goMessagerieDash").addEventListener("click", ()=>{
+    state.view = "messagerie";
     render();
   });
 }
@@ -3205,7 +3309,16 @@ function renderAdmin(){
   return `
   ${topBar()}
   <div class="breadcrumb"><button id="backPricingFromAdmin">← Formules d'accès</button> / Espace formateur</div>
-  <h1>Générer un code d'activation</h1>
+  <h1>👨‍🏫 Mon espace formateur</h1>
+  <p class="lead">Bonjour ! Voici la vue d'ensemble de ta plateforme.</p>
+  <div class="stat-tiles" id="quickStatsZone">
+    <div class="stat-tile"><div class="val">—</div><div class="lbl">👥 Étudiants</div></div>
+    <div class="stat-tile"><div class="val">—</div><div class="lbl">💬 Messages non lus</div></div>
+    <div class="stat-tile"><div class="val">—</div><div class="lbl">📝 Devoirs actifs</div></div>
+    <div class="stat-tile"><div class="val">—</div><div class="lbl">📈 Progression moyenne</div></div>
+  </div>
+
+  <h1 style="margin-top:50px;">Générer un code d'activation</h1>
   <p class="lead">Génère un code après avoir confirmé un paiement, puis transmets-le à l'élève par WhatsApp. Chaque code n'est utilisable qu'une seule fois.</p>
   <div class="lesson-actions">
     ${ACCESS_PLANS.map(p=>`<button class="btn btn-gold" data-genplan="${p.id}">Générer un code ${p.name}</button>`).join("")}
@@ -3277,12 +3390,39 @@ function renderAdmin(){
 
   <h2 style="margin-top:24px;">Groupes existants</h2>
   <div id="groupsList"><p class="dim">Chargement...</p></div>
+
+  <h1 style="margin-top:50px;">💬 Messagerie</h1>
+  <p class="lead">Toutes les conversations avec tes étudiants. Clique sur un nom pour ouvrir la discussion.</p>
+  <div id="conversationsList"><p class="dim">Chargement...</p></div>
+  <div id="conversationThreadZone" style="margin-top:16px;"></div>
   `;
 }
 
 async function attachAdmin(){
   const backBtn = document.getElementById("backPricingFromAdmin");
   if(backBtn) backBtn.addEventListener("click", ()=>{ state.view = "pricing"; render(); });
+
+  if(state.adminAuthed){
+    (async ()=>{
+      const zone = document.getElementById("quickStatsZone");
+      if(!zone) return;
+      const [students, messages, devoirs] = await Promise.all([loadAllStudents(), MessagesAPI.loadAll(), DevoirsAPI.loadAll()]);
+      const unreadMsgs = messages.filter(m=>m.from === "etudiant" && !m.readByFormateur).length;
+      let totalAvg = 0, countAvg = 0;
+      for(const s of students){
+        const p = await loadProgress(s.displayName);
+        const avg = computeAverageFromProgress(p);
+        if(avg !== null){ totalAvg += avg; countAvg++; }
+      }
+      const groupAvg = countAvg ? Math.round(totalAvg/countAvg) : null;
+      zone.innerHTML = `
+        <div class="stat-tile"><div class="val">${students.length}</div><div class="lbl">👥 Étudiants</div></div>
+        <div class="stat-tile"><div class="val">${unreadMsgs}</div><div class="lbl">💬 Messages non lus</div></div>
+        <div class="stat-tile"><div class="val">${devoirs.length}</div><div class="lbl">📝 Devoirs actifs</div></div>
+        <div class="stat-tile"><div class="val">${groupAvg !== null ? groupAvg + "%" : "—"}</div><div class="lbl">📈 Progression moyenne</div></div>
+      `;
+    })();
+  }
 
   if(!state.adminAuthed){
     const go = ()=>{
@@ -3629,6 +3769,7 @@ async function attachAdmin(){
             ${availableToAdd.map(s=>`<option value="${s.key}">${s.displayName}</option>`).join("")}
           </select>
           <button class="btn btn-ghost" data-addmember="${g.id}" style="font-size:12px; padding:6px 12px; color:var(--text-ink); border-color:var(--gold-soft);">Ajouter</button>
+          <button class="btn btn-gold" data-managegroup="${g.id}" style="font-size:12px; padding:6px 12px;">📝 Devoirs, annonces, rapport...</button>
           <button class="btn btn-ghost" data-deletegroup="${g.id}" style="font-size:12px; padding:6px 12px; color:var(--error-soft); border-color:var(--error-soft);">Supprimer le groupe</button>
         </div>
       </div>`;
@@ -3672,6 +3813,17 @@ async function attachAdmin(){
         refreshGroupsList();
       });
     });
+    zone.querySelectorAll("[data-managegroup]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{
+        btn.disabled = true;
+        const groups = await loadAllGroups();
+        const g = groups.find(x=>x.id === btn.dataset.managegroup);
+        state.adminGroupDetailId = btn.dataset.managegroup;
+        state.adminGroupDetailObj = g || null;
+        state.view = "adminGroupDetail";
+        render();
+      });
+    });
   }
 
   document.getElementById("grpCreateBtn").addEventListener("click", async ()=>{
@@ -3709,6 +3861,439 @@ async function attachAdmin(){
   });
 
   refreshGroupsList();
+
+  /* ---------- Messagerie (formateur) ---------- */
+  async function refreshConversations(){
+    const zone = document.getElementById("conversationsList");
+    const all = await MessagesAPI.loadAll();
+    const byStudent = {};
+    all.forEach(m=>{
+      if(!byStudent[m.studentKey]) byStudent[m.studentKey] = { studentKey: m.studentKey, studentName: m.studentName, messages: [], unread: 0 };
+      byStudent[m.studentKey].messages.push(m);
+      if(m.from === "etudiant" && !m.readByFormateur) byStudent[m.studentKey].unread++;
+    });
+    const conversations = Object.values(byStudent).sort((a,b)=>{
+      const lastA = Math.max(...a.messages.map(m=>m.createdAt));
+      const lastB = Math.max(...b.messages.map(m=>m.createdAt));
+      return lastB - lastA;
+    });
+    if(conversations.length === 0){
+      zone.innerHTML = `<p class="dim">Aucune conversation pour le moment.</p>`;
+      return;
+    }
+    zone.innerHTML = conversations.map(c=>`
+      <div class="conv-row" data-convstudent="${c.studentKey}">
+        <span>${c.studentName}</span>
+        ${c.unread > 0 ? `<span class="unread-badge">${c.unread} non lu(s)</span>` : `<span class="dim" style="font-size:11px;">à jour</span>`}
+      </div>`).join("");
+    zone.querySelectorAll("[data-convstudent]").forEach(row=>{
+      row.addEventListener("click", ()=> openConversation(row.dataset.convstudent));
+    });
+  }
+
+  async function openConversation(studentKey){
+    const zone = document.getElementById("conversationThreadZone");
+    zone.innerHTML = `<p class="dim">Chargement de la conversation...</p>`;
+    const all = await MessagesAPI.loadAll();
+    const thread = all.filter(m=>m.studentKey === studentKey).sort((a,b)=>a.createdAt-b.createdAt);
+    const studentName = thread.length ? thread[0].studentName : studentKey;
+    zone.innerHTML = `
+      <h3 style="margin-bottom:10px;">Conversation avec ${studentName}</h3>
+      <div class="msg-thread" id="adminMsgThread"></div>
+      <div class="msg-input-row">
+        <textarea id="adminMsgInput" placeholder="Écris ta réponse..."></textarea>
+        <button class="btn btn-gold" id="adminMsgSendBtn">Envoyer</button>
+      </div>
+    `;
+    document.getElementById("adminMsgThread").innerHTML = thread.map(m=>
+      `<div class="msg-bubble from-${m.from}">${m.contenu}<span class="msg-date">${new Date(m.createdAt).toLocaleString("fr-FR")}</span></div>`
+    ).join("");
+    // Marquer les messages de l'étudiant comme lus par le formateur
+    for(const m of thread){
+      if(m.from === "etudiant" && !m.readByFormateur){ m.readByFormateur = true; await MessagesAPI.save(m); }
+    }
+    refreshConversations();
+
+    document.getElementById("adminMsgSendBtn").addEventListener("click", async ()=>{
+      const input = document.getElementById("adminMsgInput");
+      const contenu = input.value.trim();
+      if(!contenu) return;
+      const btn = document.getElementById("adminMsgSendBtn");
+      btn.disabled = true;
+      await MessagesAPI.save({
+        id: `message_${Date.now()}`, studentKey, studentName,
+        from: "formateur", contenu, createdAt: Date.now(), readByFormateur: true, readByEtudiant: false
+      });
+      // Notifier l'élève
+      const progress = await loadProgress(studentName);
+      if(!progress.notifications) progress.notifications = [];
+      progress.notifications.unshift({ message: "Nouveau message de votre formateur.", date: Date.now(), read: false });
+      progress.notifications = progress.notifications.slice(0, 50);
+      await saveProgress(studentName, progress);
+
+      input.value = "";
+      btn.disabled = false;
+      openConversation(studentKey);
+    });
+  }
+
+  refreshConversations();
+}
+
+/* ==================================================================
+   PHASE A — Gestion pédagogique d'un groupe (devoirs, annonces,
+   ressources, calendrier, rapport, analyse IA des difficultés)
+   ================================================================== */
+
+function renderAdminGroupDetail(){
+  const g = state.adminGroupDetailObj;
+  if(!g){
+    return `${topBar()}<div class="breadcrumb"><button id="backToGroupsFromDetail">← Espace formateur</button></div><p class="dim">Groupe introuvable.</p>`;
+  }
+  const compOptions = GROUP_COMPETENCE_OPTIONS.filter(c=>c.id!=="examens_blancs").map(c=>`<option value="${c.id}">${c.label}</option>`).join("");
+  return `
+  ${topBar()}
+  <div class="breadcrumb"><button id="backToGroupsFromDetail">← Espace formateur</button> / ${g.name}</div>
+  <h1>${g.name}</h1>
+  <p class="lead">Du ${new Date(g.startDate).toLocaleDateString("fr-FR")} au ${new Date(g.endDate).toLocaleDateString("fr-FR")} — ${(g.members||[]).length} étudiant(s)</p>
+
+  <h2>📝 Devoirs</h2>
+  <div class="card" style="max-width:600px;">
+    <div class="gen-field"><label>Titre</label><input type="text" id="devTitre" placeholder="Ex: Devoir B1 — Compréhension écrite"></div>
+    <div class="gen-field"><label>Description</label><input type="text" id="devDesc" placeholder="Consigne courte pour les élèves"></div>
+    <div class="gen-form" style="grid-template-columns:1fr 1fr;">
+      <div class="gen-field"><label>Niveau</label><select id="devNiveau">${LEVELS.map(l=>`<option value="${l}">${l}</option>`).join("")}</select></div>
+      <div class="gen-field"><label>Compétence</label><select id="devCompetence">${compOptions}</select></div>
+    </div>
+    <div class="gen-field"><label>Date limite (optionnel)</label><input type="date" id="devDateLimite"></div>
+    <button class="btn btn-gold" id="devCreateBtn" style="margin-top:10px;">Créer le devoir</button>
+    <p id="devCreateMsg" style="font-size:12px; margin-top:6px;"></p>
+  </div>
+  <div id="devoirsList" style="margin-top:14px;"><p class="dim">Chargement...</p></div>
+
+  <h2 style="margin-top:30px;">📢 Annonces</h2>
+  <div class="card" style="max-width:600px;">
+    <div class="gen-field"><label>Titre</label><input type="text" id="annTitre" placeholder="Ex: Cours de demain"></div>
+    <div class="gen-field"><label>Message</label><textarea id="annContenu" placeholder="Bonjour à tous..." style="min-height:80px;"></textarea></div>
+    <button class="btn btn-gold" id="annCreateBtn" style="margin-top:10px;">Publier l'annonce</button>
+    <p id="annCreateMsg" style="font-size:12px; margin-top:6px;"></p>
+  </div>
+  <div id="annoncesList" style="margin-top:14px;"><p class="dim">Chargement...</p></div>
+
+  <h2 style="margin-top:30px;">📚 Ressources</h2>
+  <div class="card" style="max-width:600px;">
+    <div class="gen-field"><label>Nom</label><input type="text" id="resNom" placeholder="Ex: Fiche grammaire imparfait"></div>
+    <div class="gen-field"><label>Lien (URL)</label><input type="text" id="resLien" placeholder="https://..."></div>
+    <button class="btn btn-gold" id="resCreateBtn" style="margin-top:10px;">Ajouter la ressource</button>
+    <p id="resCreateMsg" style="font-size:12px; margin-top:6px;"></p>
+  </div>
+  <div id="ressourcesList" style="margin-top:14px;"><p class="dim">Chargement...</p></div>
+
+  <h2 style="margin-top:30px;">📅 Calendrier</h2>
+  <div class="card" style="max-width:600px;">
+    <div class="gen-field"><label>Titre</label><input type="text" id="evtTitre" placeholder="Ex: Cours compréhension orale"></div>
+    <div class="gen-form" style="grid-template-columns:1fr 1fr;">
+      <div class="gen-field"><label>Date</label><input type="date" id="evtDate"></div>
+      <div class="gen-field"><label>Heure (optionnel)</label><input type="time" id="evtHeure"></div>
+    </div>
+    <button class="btn btn-gold" id="evtCreateBtn" style="margin-top:10px;">Ajouter au calendrier</button>
+    <p id="evtCreateMsg" style="font-size:12px; margin-top:6px;"></p>
+  </div>
+  <div id="evenementsList" style="margin-top:14px;"><p class="dim">Chargement...</p></div>
+
+  <h2 style="margin-top:30px;">📊 Rapport du groupe</h2>
+  <button class="btn btn-ghost" id="genReportBtn" style="color:var(--text-ink); border-color:var(--gold-soft);">Générer le rapport</button>
+  <div id="groupReportZone" style="margin-top:14px;"></div>
+
+  <h2 style="margin-top:30px;">🤖 Analyser les difficultés du groupe</h2>
+  <button class="btn btn-ghost" id="analyzeGroupBtn" style="color:var(--text-ink); border-color:var(--gold-soft);">Analyser les difficultés de ce groupe</button>
+  <div id="groupAnalysisZone" style="margin-top:14px;"></div>
+  `;
+}
+
+function attachAdminGroupDetail(){
+  const g = state.adminGroupDetailObj;
+  const backBtn = document.getElementById("backToGroupsFromDetail");
+  if(backBtn) backBtn.addEventListener("click", ()=>{ state.view = "admin"; render(); });
+  if(!g) return;
+
+  async function refreshDevoirsList(){
+    const zone = document.getElementById("devoirsList");
+    const all = await DevoirsAPI.loadAll();
+    const devoirs = all.filter(d=>d.groupId === g.id);
+    if(devoirs.length === 0){ zone.innerHTML = `<p class="dim">Aucun devoir créé pour ce groupe.</p>`; return; }
+    const students = await loadAllStudents();
+    const memberProgresses = {};
+    for(const key of (g.members || [])){
+      const s = students.find(st=>st.key === key);
+      if(s) memberProgresses[key] = { displayName: s.displayName, progress: await loadProgress(s.displayName) };
+    }
+    zone.innerHTML = devoirs.map(d=>{
+      const rows = (g.members || []).map(key=>{
+        const m = memberProgresses[key];
+        if(!m) return "";
+        const rec = m.progress.devoirsCompletes && m.progress.devoirsCompletes[d.id];
+        let dotClass = "notdone", label = "Non commencé";
+        if(rec){ dotClass = "done"; label = rec.score !== null ? `Terminé — ${rec.score}%` : "Terminé"; }
+        return `<div class="devoir-suivi-row"><span><span class="badge-dot ${dotClass}"></span>${m.displayName}</span><span>${label}</span></div>`;
+      }).join("");
+      return `<div class="devoir-card">
+        <strong>${d.titre}</strong> <span class="dim" style="font-size:11px;">(${d.niveau} · ${GEN_COMPETENCES.find(c=>c.id===d.competence)?.label || d.competence})</span>
+        <p class="dim" style="font-size:12px; margin:4px 0;">${d.description || ""}</p>
+        <p class="dim" style="font-size:11px;">Date limite : ${d.dateLimite ? new Date(d.dateLimite).toLocaleDateString("fr-FR") : "—"}</p>
+        <div style="margin-top:8px;">${rows}</div>
+        <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn btn-ghost" data-reminddevoir="${d.id}" style="font-size:11px; padding:5px 10px; color:var(--text-ink); border-color:var(--gold-soft);">Envoyer un rappel aux retardataires</button>
+          <button class="btn btn-ghost" data-deletedevoir="${d.id}" style="font-size:11px; padding:5px 10px; color:var(--error-soft); border-color:var(--error-soft);">Supprimer</button>
+        </div>
+      </div>`;
+    }).join("");
+
+    zone.querySelectorAll("[data-reminddevoir]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{
+        btn.disabled = true;
+        const d = devoirs.find(x=>x.id === btn.dataset.reminddevoir);
+        let count = 0;
+        for(const key of (g.members || [])){
+          const m = memberProgresses[key];
+          if(!m) continue;
+          const rec = m.progress.devoirsCompletes && m.progress.devoirsCompletes[d.id];
+          if(!rec){
+            const p = m.progress;
+            if(!p.notifications) p.notifications = [];
+            p.notifications.unshift({ message: `Rappel : le devoir "${d.titre}" n'est pas encore terminé.`, date: Date.now(), read: false });
+            p.notifications = p.notifications.slice(0, 50);
+            await saveProgress(m.displayName, p);
+            count++;
+          }
+        }
+        alert(`Rappel envoyé à ${count} étudiant(s).`);
+        btn.disabled = false;
+      });
+    });
+    zone.querySelectorAll("[data-deletedevoir]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{
+        if(!confirm("Supprimer ce devoir ?")) return;
+        await DevoirsAPI.remove(btn.dataset.deletedevoir);
+        refreshDevoirsList();
+      });
+    });
+  }
+
+  document.getElementById("devCreateBtn").addEventListener("click", async ()=>{
+    const titre = document.getElementById("devTitre").value.trim();
+    const description = document.getElementById("devDesc").value.trim();
+    const niveau = document.getElementById("devNiveau").value;
+    const competence = document.getElementById("devCompetence").value;
+    const dateLimite = document.getElementById("devDateLimite").value;
+    const msg = document.getElementById("devCreateMsg");
+    if(!titre){ msg.textContent = "Le titre est requis."; msg.style.color = "var(--error-soft)"; return; }
+    const devoir = { id: `devoir_${Date.now()}`, titre, description, niveau, competence, groupId: g.id, dateLimite: dateLimite || null, datePublication: Date.now(), nbQuestions: 10, createdAt: Date.now() };
+    await DevoirsAPI.save(devoir);
+    msg.textContent = "✅ Devoir créé."; msg.style.color = "var(--success)";
+    document.getElementById("devTitre").value = ""; document.getElementById("devDesc").value = "";
+    refreshDevoirsList();
+  });
+
+  async function refreshAnnoncesList(){
+    const zone = document.getElementById("annoncesList");
+    const all = await AnnoncesAPI.loadAll();
+    const items = all.filter(a=>a.groupId === g.id);
+    if(items.length === 0){ zone.innerHTML = `<p class="dim">Aucune annonce publiée.</p>`; return; }
+    zone.innerHTML = items.map(a=>`<div class="annonce-card">
+      <strong>${a.titre}</strong>
+      <p style="margin:6px 0 0; white-space:pre-wrap;">${a.contenu}</p>
+      <p class="dim" style="font-size:11px; margin-top:6px;">${new Date(a.createdAt).toLocaleDateString("fr-FR")}</p>
+      <button class="btn btn-ghost" data-deleteannonce="${a.id}" style="font-size:11px; padding:5px 10px; margin-top:6px; color:var(--error-soft); border-color:var(--error-soft);">Supprimer</button>
+    </div>`).join("");
+    zone.querySelectorAll("[data-deleteannonce]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{ await AnnoncesAPI.remove(btn.dataset.deleteannonce); refreshAnnoncesList(); });
+    });
+  }
+  document.getElementById("annCreateBtn").addEventListener("click", async ()=>{
+    const titre = document.getElementById("annTitre").value.trim();
+    const contenu = document.getElementById("annContenu").value.trim();
+    const msg = document.getElementById("annCreateMsg");
+    if(!titre || !contenu){ msg.textContent = "Titre et message sont requis."; msg.style.color = "var(--error-soft)"; return; }
+    await AnnoncesAPI.save({ id: `annonce_${Date.now()}`, titre, contenu, groupId: g.id, createdAt: Date.now() });
+    msg.textContent = "✅ Annonce publiée."; msg.style.color = "var(--success)";
+    document.getElementById("annTitre").value = ""; document.getElementById("annContenu").value = "";
+    refreshAnnoncesList();
+  });
+
+  async function refreshRessourcesList(){
+    const zone = document.getElementById("ressourcesList");
+    const all = await RessourcesAPI.loadAll();
+    const items = all.filter(r=>r.groupId === g.id);
+    if(items.length === 0){ zone.innerHTML = `<p class="dim">Aucune ressource ajoutée.</p>`; return; }
+    zone.innerHTML = items.map(r=>`<div class="ressource-card">
+      <a href="${r.lien}" target="_blank" style="color:var(--gold-soft); font-weight:600;">${r.nom}</a>
+      <button class="btn btn-ghost" data-deleteressource="${r.id}" style="font-size:11px; padding:5px 10px; margin-left:10px; color:var(--error-soft); border-color:var(--error-soft);">Supprimer</button>
+    </div>`).join("");
+    zone.querySelectorAll("[data-deleteressource]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{ await RessourcesAPI.remove(btn.dataset.deleteressource); refreshRessourcesList(); });
+    });
+  }
+  document.getElementById("resCreateBtn").addEventListener("click", async ()=>{
+    const nom = document.getElementById("resNom").value.trim();
+    const lien = document.getElementById("resLien").value.trim();
+    const msg = document.getElementById("resCreateMsg");
+    if(!nom || !lien){ msg.textContent = "Nom et lien sont requis."; msg.style.color = "var(--error-soft)"; return; }
+    await RessourcesAPI.save({ id: `ressource_${Date.now()}`, nom, lien, groupId: g.id, createdAt: Date.now() });
+    msg.textContent = "✅ Ressource ajoutée."; msg.style.color = "var(--success)";
+    document.getElementById("resNom").value = ""; document.getElementById("resLien").value = "";
+    refreshRessourcesList();
+  });
+
+  async function refreshEvenementsList(){
+    const zone = document.getElementById("evenementsList");
+    const all = await EvenementsAPI.loadAll();
+    const items = all.filter(e=>e.groupId === g.id).sort((a,b)=> new Date(a.date) - new Date(b.date));
+    if(items.length === 0){ zone.innerHTML = `<p class="dim">Aucun événement au calendrier.</p>`; return; }
+    zone.innerHTML = items.map(e=>`<div class="event-card">
+      <strong>${new Date(e.date).toLocaleDateString("fr-FR")}${e.heure ? " — " + e.heure : ""}</strong>
+      <p style="margin:4px 0 0;">${e.titre}</p>
+      <button class="btn btn-ghost" data-deleteevent="${e.id}" style="font-size:11px; padding:5px 10px; margin-top:6px; color:var(--error-soft); border-color:var(--error-soft);">Supprimer</button>
+    </div>`).join("");
+    zone.querySelectorAll("[data-deleteevent]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{ await EvenementsAPI.remove(btn.dataset.deleteevent); refreshEvenementsList(); });
+    });
+  }
+  document.getElementById("evtCreateBtn").addEventListener("click", async ()=>{
+    const titre = document.getElementById("evtTitre").value.trim();
+    const date = document.getElementById("evtDate").value;
+    const heure = document.getElementById("evtHeure").value;
+    const msg = document.getElementById("evtCreateMsg");
+    if(!titre || !date){ msg.textContent = "Titre et date sont requis."; msg.style.color = "var(--error-soft)"; return; }
+    await EvenementsAPI.save({ id: `event_${Date.now()}`, titre, date, heure: heure || null, groupId: g.id, createdAt: Date.now() });
+    msg.textContent = "✅ Événement ajouté."; msg.style.color = "var(--success)";
+    document.getElementById("evtTitre").value = "";
+    refreshEvenementsList();
+  });
+
+  document.getElementById("genReportBtn").addEventListener("click", async ()=>{
+    const btn = document.getElementById("genReportBtn");
+    const zone = document.getElementById("groupReportZone");
+    btn.disabled = true;
+    zone.innerHTML = `<p class="dim">Génération du rapport...</p>`;
+    const students = await loadAllStudents();
+    const members = (g.members || []).map(key=>students.find(s=>s.key === key)).filter(Boolean);
+    if(members.length === 0){ zone.innerHTML = `<p class="dim">Aucun membre dans ce groupe.</p>`; btn.disabled = false; return; }
+    let totalAvg = 0, countAvg = 0, enDifficulte = 0;
+    const compAgg = {};
+    for(const m of members){
+      const p = await loadProgress(m.displayName);
+      const avg = computeAverageFromProgress(p);
+      if(avg !== null){ totalAvg += avg; countAvg++; if(avg < 50) enDifficulte++; }
+      const report = computeProgressionReport(p);
+      Object.entries(report.byCompetence).forEach(([k,c])=>{
+        if(c.scoreCount > 0){
+          if(!compAgg[k]) compAgg[k] = { sum:0, count:0, label:c.label };
+          compAgg[k].sum += c.avgScore; compAgg[k].count++;
+        }
+      });
+    }
+    const groupAvg = countAvg ? Math.round(totalAvg/countAvg) : null;
+    const compRows = Object.values(compAgg).map(c=>({ label:c.label, avg: Math.round(c.sum/c.count) })).sort((a,b)=>b.avg-a.avg);
+    const fortes = compRows.filter(c=>c.avg >= 70).map(c=>c.label);
+    const faibles = compRows.filter(c=>c.avg < 50).map(c=>c.label);
+    zone.innerHTML = `
+      <div class="stat-tiles">
+        <div class="stat-tile"><div class="val">${groupAvg !== null ? groupAvg + "%" : "—"}</div><div class="lbl">Progression moyenne</div></div>
+        <div class="stat-tile"><div class="val">${members.length}</div><div class="lbl">Étudiants</div></div>
+        <div class="stat-tile"><div class="val">${enDifficulte}</div><div class="lbl">En difficulté (&lt;50%)</div></div>
+      </div>
+      <p><strong>Compétences fortes :</strong> ${fortes.length ? fortes.join(", ") : "Aucune identifiée pour l'instant"}</p>
+      <p><strong>Compétences faibles :</strong> ${faibles.length ? faibles.join(", ") : "Aucune identifiée pour l'instant"}</p>
+    `;
+    btn.disabled = false;
+  });
+
+  document.getElementById("analyzeGroupBtn").addEventListener("click", async ()=>{
+    const btn = document.getElementById("analyzeGroupBtn");
+    const zone = document.getElementById("groupAnalysisZone");
+    btn.disabled = true;
+    zone.innerHTML = `<p class="dim">Analyse des difficultés en cours...</p>`;
+    const students = await loadAllStudents();
+    const members = (g.members || []).map(key=>students.find(s=>s.key === key)).filter(Boolean);
+    if(members.length === 0){ zone.innerHTML = `<p class="dim">Aucun membre dans ce groupe.</p>`; btn.disabled = false; return; }
+    const compCount = {};
+    const themesByComp = {};
+    for(const m of members){
+      const p = await loadProgress(m.displayName);
+      const errors = p.erreurs || [];
+      const compsForThisStudent = new Set();
+      errors.forEach(e=>{
+        compsForThisStudent.add(e.competence);
+        if(!themesByComp[e.competence]) themesByComp[e.competence] = {};
+        themesByComp[e.competence][e.lessonTitle] = (themesByComp[e.competence][e.lessonTitle] || 0) + 1;
+      });
+      compsForThisStudent.forEach(c=>{ compCount[c] = (compCount[c] || 0) + 1; });
+    }
+    const sorted = Object.entries(compCount).sort((a,b)=>b[1]-a[1]);
+    if(sorted.length === 0){
+      zone.innerHTML = `<p class="dim">Pas assez de données d'erreurs pour analyser ce groupe pour l'instant.</p>`;
+      btn.disabled = false;
+      return;
+    }
+    const [topComp, topCount] = sorted[0];
+    const pct = Math.round((topCount / members.length) * 100);
+    const compLabel = GEN_COMPETENCES.find(c=>c.id === topComp)?.label || topComp;
+    const topTheme = Object.entries(themesByComp[topComp] || {}).sort((a,b)=>b[1]-a[1])[0];
+    const themeLabel = topTheme ? topTheme[0] : compLabel;
+
+    zone.innerHTML = `
+      <div class="difficulty-alert">
+        <p style="margin:0 0 8px;"><strong>${pct}% des étudiants</strong> de ce groupe rencontrent des difficultés avec : <strong>${themeLabel}</strong> (${compLabel}).</p>
+        <p class="dim" style="margin:0 0 12px;">Recommandation : créer une séance de révision ciblée sur ce point.</p>
+        <button class="btn btn-gold" id="generateCorrectiveBtn">Générer une activité corrective (IA)</button>
+        <div id="correctiveActivityZone" style="margin-top:14px;"></div>
+      </div>
+    `;
+    btn.disabled = false;
+
+    document.getElementById("generateCorrectiveBtn").addEventListener("click", async ()=>{
+      const genBtn = document.getElementById("generateCorrectiveBtn");
+      const genZone = document.getElementById("correctiveActivityZone");
+      genBtn.disabled = true;
+      genZone.innerHTML = `<p class="dim">Génération en cours...</p>`;
+      try{
+        const niveauMoyen = (g.levels && g.levels[0]) ? g.levels[0] : "B1";
+        const ex = await generateExerciseAI({ niveau: niveauMoyen, competence: topComp, theme: themeLabel, difficulte: "Moyen", type: "qcm" });
+        genZone.innerHTML = `
+          <div class="card" style="max-width:600px;">
+            <p><strong>Consigne :</strong> ${ex.consigne || ""}</p>
+            ${ex.contenu ? `<p style="white-space:pre-wrap; background:var(--ink); padding:10px; border-radius:6px;">${ex.contenu}</p>` : ""}
+            <pre style="white-space:pre-wrap; font-size:12px; background:var(--ink); padding:10px; border-radius:6px;">${JSON.stringify(ex.questions, null, 2)}</pre>
+            <p class="dim" style="font-size:12px;">Relis ce contenu avant publication — tu peux le modifier directement dans Supabase si besoin, ou simplement le republier si tu n'es pas satisfait.</p>
+            <button class="btn btn-gold" id="publishAsDevoirBtn">Publier comme devoir pour ce groupe</button>
+            <p id="publishMsg" style="font-size:12px; margin-top:6px;"></p>
+          </div>
+        `;
+        document.getElementById("publishAsDevoirBtn").addEventListener("click", async ()=>{
+          const devoir = {
+            id: `devoir_${Date.now()}`, titre: `Révision IA : ${themeLabel}`,
+            description: ex.objectifPedagogique || "Activité générée automatiquement suite à l'analyse des difficultés du groupe.",
+            niveau: niveauMoyen, competence: topComp, groupId: g.id, dateLimite: null,
+            datePublication: Date.now(), nbQuestions: (ex.questions || []).length || 5, createdAt: Date.now(),
+            customQuestions: ex.questions || null
+          };
+          await DevoirsAPI.save(devoir);
+          document.getElementById("publishMsg").textContent = "✅ Devoir publié pour le groupe.";
+          document.getElementById("publishMsg").style.color = "var(--success)";
+          refreshDevoirsList();
+        });
+      }catch(err){
+        genZone.innerHTML = `<p class="dim" style="color:var(--error-soft);">La génération a échoué. Réessaie.</p>`;
+      }
+      genBtn.disabled = false;
+    });
+  });
+
+  refreshDevoirsList();
+  refreshAnnoncesList();
+  refreshRessourcesList();
+  refreshEvenementsList();
 }
 
 /* ---------- Examen blanc ---------- */
@@ -3892,6 +4477,49 @@ function startCompetenceTest(competence, level){
   const qs = buildCompetenceTest(competence, level, 10);
   if(qs.length === 0) return;
   state.examMode = "competence";
+  state.examLevel = level;
+  state.examCompetence = competence;
+  state.examQuestions = qs;
+  state.examAnswers = new Array(qs.length).fill(null);
+  state.examIndex = 0;
+  state.examRevealedLessons = [];
+  state.examDeadline = Date.now() + qs.length * EXAM_SECONDS_PER_QUESTION * 1000;
+  state.examResult = null;
+  state.view = "examRunning";
+  render();
+}
+
+function startDevoir(devoir){
+  state.currentDevoirId = devoir.id;
+  const competence = devoir.competence;
+  const level = devoir.niveau;
+  if(competence === "expression_ecrite" || competence === "expression_orale"){
+    const mod = DATA.modules.find(m=>m.id === competence);
+    const lessons = mod.lessons.filter(l=>l.level === level);
+    if(lessons.length === 0){ state.currentDevoirId = null; return; }
+    const lesson = lessons[Math.floor(Math.random()*lessons.length)];
+    state.moduleId = competence;
+    state.lessonId = lesson.id;
+    state.lessonStartTime = Date.now();
+    state.view = "lessonExpression";
+    render();
+    return;
+  }
+  let qs;
+  if(devoir.customQuestions && devoir.customQuestions.length){
+    // Devoir généré par l'IA lors de l'analyse des difficultés du groupe
+    qs = devoir.customQuestions.map(q=> shuffleQuestionOptions({
+      moduleId: (competence === "grammaire" || competence === "vocabulaire") ? "structures" : competence,
+      moduleName: GEN_COMPETENCES.find(c=>c.id===competence)?.label || competence,
+      lessonTitle: devoir.titre,
+      transcript: null, text: null,
+      q: q.q, options: q.options, answer: q.answer
+    }));
+  } else {
+    qs = buildCompetenceTest(competence, level, devoir.nbQuestions || 10);
+  }
+  if(qs.length === 0){ state.currentDevoirId = null; return; }
+  state.examMode = "devoir";
   state.examLevel = level;
   state.examCompetence = competence;
   state.examQuestions = qs;
@@ -4090,6 +4718,135 @@ function attachMesErreurs(){
   }
 }
 
+function renderMonGroupe(){
+  if(!state.myGroup){
+    return `
+    ${topBar()}
+    <div class="breadcrumb"><button id="backDashFromMonGroupe">← Tableau de bord</button> / Mon groupe</div>
+    <h1>Mon groupe</h1>
+    <p class="dim">Tu ne fais partie d'aucun groupe actif pour le moment. Demande à ton formateur de t'ajouter à un groupe si besoin.</p>
+    `;
+  }
+  const g = state.myGroup;
+  return `
+  ${topBar()}
+  <div class="breadcrumb"><button id="backDashFromMonGroupe">← Tableau de bord</button> / Mon groupe</div>
+  <h1>${g.name}</h1>
+  <p class="lead">Accès jusqu'au ${new Date(g.endDate).toLocaleDateString("fr-FR")}.</p>
+
+  <h2>📝 Mes devoirs</h2>
+  <div id="myDevoirsList"><p class="dim">Chargement...</p></div>
+
+  <h2 style="margin-top:24px;">📢 Annonces</h2>
+  <div id="myAnnoncesList"><p class="dim">Chargement...</p></div>
+
+  <h2 style="margin-top:24px;">📚 Ressources</h2>
+  <div id="myRessourcesList"><p class="dim">Chargement...</p></div>
+
+  <h2 style="margin-top:24px;">📅 Calendrier</h2>
+  <div id="myEvenementsList"><p class="dim">Chargement...</p></div>
+  `;
+}
+function attachMonGroupe(){
+  const backBtn = document.getElementById("backDashFromMonGroupe");
+  if(backBtn) backBtn.addEventListener("click", ()=>{ state.view = "dashboard"; render(); });
+  if(!state.myGroup) return;
+  const g = state.myGroup;
+
+  (async ()=>{
+    const zone = document.getElementById("myDevoirsList");
+    const all = await DevoirsAPI.loadAll();
+    const devoirs = all.filter(d=>d.groupId === g.id);
+    if(devoirs.length === 0){ zone.innerHTML = `<p class="dim">Aucun devoir pour le moment.</p>`; return; }
+    zone.innerHTML = devoirs.map(d=>{
+      const rec = state.progress.devoirsCompletes && state.progress.devoirsCompletes[d.id];
+      const status = rec ? (rec.score !== null ? `✅ Terminé — ${rec.score}%` : "✅ Terminé") : "🔴 Non commencé";
+      return `<div class="devoir-card">
+        <strong>${d.titre}</strong> <span class="dim" style="font-size:11px;">(${d.niveau})</span>
+        <p class="dim" style="font-size:12px; margin:4px 0;">${d.description || ""}</p>
+        ${d.dateLimite ? `<p class="dim" style="font-size:11px;">Date limite : ${new Date(d.dateLimite).toLocaleDateString("fr-FR")}</p>` : ""}
+        <p style="font-size:12px; margin:6px 0;">${status}</p>
+        ${!rec ? `<button class="btn btn-gold" data-startdevoir="${d.id}" style="font-size:12px; padding:6px 12px;">Faire le devoir</button>` : ""}
+      </div>`;
+    }).join("");
+    zone.querySelectorAll("[data-startdevoir]").forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        const d = devoirs.find(x=>x.id === btn.dataset.startdevoir);
+        if(d) startDevoir(d);
+      });
+    });
+  })();
+
+  (async ()=>{
+    const zone = document.getElementById("myAnnoncesList");
+    const all = await AnnoncesAPI.loadAll();
+    const items = all.filter(a=>a.groupId === g.id);
+    zone.innerHTML = items.length ? items.map(a=>`<div class="annonce-card"><strong>${a.titre}</strong><p style="margin:6px 0 0; white-space:pre-wrap;">${a.contenu}</p><p class="dim" style="font-size:11px; margin-top:6px;">${new Date(a.createdAt).toLocaleDateString("fr-FR")}</p></div>`).join("") : `<p class="dim">Aucune annonce pour le moment.</p>`;
+  })();
+
+  (async ()=>{
+    const zone = document.getElementById("myRessourcesList");
+    const all = await RessourcesAPI.loadAll();
+    const items = all.filter(r=>r.groupId === g.id);
+    zone.innerHTML = items.length ? items.map(r=>`<div class="ressource-card"><a href="${r.lien}" target="_blank" style="color:var(--gold-soft); font-weight:600;">${r.nom}</a></div>`).join("") : `<p class="dim">Aucune ressource pour le moment.</p>`;
+  })();
+
+  (async ()=>{
+    const zone = document.getElementById("myEvenementsList");
+    const all = await EvenementsAPI.loadAll();
+    const items = all.filter(e=>e.groupId === g.id).sort((a,b)=> new Date(a.date) - new Date(b.date));
+    zone.innerHTML = items.length ? items.map(e=>`<div class="event-card"><strong>${new Date(e.date).toLocaleDateString("fr-FR")}${e.heure ? " — " + e.heure : ""}</strong><p style="margin:4px 0 0;">${e.titre}</p></div>`).join("") : `<p class="dim">Aucun événement pour le moment.</p>`;
+  })();
+}
+
+function renderMessagerie(){
+  return `
+  ${topBar()}
+  <div class="breadcrumb"><button id="backDashFromMsg">← Tableau de bord</button> / Messagerie</div>
+  <h1>👨‍🏫 Contacter mon formateur</h1>
+  <p class="lead">Échange directement avec ton formateur. Il recevra ton message et pourra te répondre ici.</p>
+  <div class="msg-thread" id="msgThreadZone"><p class="dim">Chargement...</p></div>
+  <div class="msg-input-row">
+    <textarea id="msgInput" placeholder="Écris ton message ici..."></textarea>
+    <button class="btn btn-gold" id="msgSendBtn">Envoyer</button>
+  </div>
+  `;
+}
+async function attachMessagerie(){
+  document.getElementById("backDashFromMsg").addEventListener("click", ()=>{ state.view = "dashboard"; render(); });
+  const studentKey = state.student.trim().toLowerCase();
+
+  async function refreshThread(){
+    const zone = document.getElementById("msgThreadZone");
+    const all = await MessagesAPI.loadAll();
+    const thread = all.filter(m=>m.studentKey === studentKey).sort((a,b)=>a.createdAt-b.createdAt);
+    zone.innerHTML = thread.length
+      ? thread.map(m=>`<div class="msg-bubble from-${m.from}">${m.contenu}<span class="msg-date">${new Date(m.createdAt).toLocaleString("fr-FR")}</span></div>`).join("")
+      : `<p class="dim">Aucun message pour le moment — écris le premier !</p>`;
+    zone.scrollTop = zone.scrollHeight;
+    // Marquer les messages du formateur comme lus par l'élève
+    let changed = false;
+    thread.forEach(m=>{ if(m.from === "formateur" && !m.readByEtudiant){ m.readByEtudiant = true; changed = true; MessagesAPI.save(m); } });
+  }
+
+  document.getElementById("msgSendBtn").addEventListener("click", async ()=>{
+    const input = document.getElementById("msgInput");
+    const contenu = input.value.trim();
+    if(!contenu) return;
+    const btn = document.getElementById("msgSendBtn");
+    btn.disabled = true;
+    await MessagesAPI.save({
+      id: `message_${Date.now()}`, studentKey, studentName: state.student,
+      from: "etudiant", contenu, createdAt: Date.now(), readByFormateur: false, readByEtudiant: true
+    });
+    input.value = "";
+    btn.disabled = false;
+    refreshThread();
+  });
+
+  refreshThread();
+}
+
 function renderExamHub(){
   const examLock = isExamensBlancsLockedForStudent();
   if(examLock.locked){
@@ -4107,7 +4864,7 @@ function renderExamHub(){
 
   const history = (state.progress.examHistory || []).slice(0, 8);
   const historyHtml = history.length ? history.map(h=>{
-    const modeLabels = { niveau:"Test chronométré", mini:"Mini-test", competence:"Entraînement", complet:"Examen complet", erreurs:"Révision de mes erreurs" };
+    const modeLabels = { niveau:"Test chronométré", mini:"Mini-test", competence:"Entraînement", complet:"Examen complet", erreurs:"Révision de mes erreurs", devoir:"Devoir" };
     const compLabel = h.competence ? " — " + (GEN_COMPETENCES.find(c=>c.id===h.competence)?.label || h.competence) : "";
     return `<div class="history-row">
       <span>${modeLabels[h.type] || h.type} · ${h.level}${compLabel}</span>
@@ -4476,6 +5233,12 @@ function finishExam(){
     score: globalScore,
     total: totalQuestions
   });
+  if(state.currentDevoirId){
+    if(!state.progress.devoirsCompletes) state.progress.devoirsCompletes = {};
+    state.progress.devoirsCompletes[state.currentDevoirId] = { score: globalScore, date: Date.now() };
+    saveProgress(state.student, state.progress);
+    state.currentDevoirId = null;
+  }
   state.view = "examResult";
   render();
 }
@@ -4569,7 +5332,7 @@ function renderExamResult(){
       <span class="status">${l.modId === "expression_ecrite" ? "Expression écrite" : "Expression orale"}</span>
     </div>`).join("");
 
-  const modeLabels = { niveau: "Examen blanc par niveau", mini: "Mini-test", competence: "Entraînement par compétence", erreurs: "Révision de mes erreurs" };
+  const modeLabels = { niveau: "Examen blanc par niveau", mini: "Mini-test", competence: "Entraînement par compétence", erreurs: "Révision de mes erreurs", devoir: "Devoir" };
   const titre = modeLabels[state.examMode] || "Examen blanc";
   const lvl = levelFromScore(r.globalScore);
 
@@ -4978,6 +5741,11 @@ function attachLessonExpression(){
     const elapsed = state.lessonStartTime ? Math.round((Date.now() - state.lessonStartTime)/1000) : 0;
     state.progress.studyTimeSeconds = (state.progress.studyTimeSeconds || 0) + elapsed;
     state.progress.totalSessions = (state.progress.totalSessions || 0) + 1;
+    if(state.currentDevoirId){
+      if(!state.progress.devoirsCompletes) state.progress.devoirsCompletes = {};
+      state.progress.devoirsCompletes[state.currentDevoirId] = { score: null, date: Date.now() };
+      state.currentDevoirId = null;
+    }
     await saveProgress(state.student, state.progress);
     state.view = "moduleLessons";
     render();
@@ -5225,3 +5993,4 @@ render();
 </script>
 </body>
 </html>
+
